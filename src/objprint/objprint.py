@@ -7,9 +7,8 @@ import inspect
 import itertools
 import json
 import re
-from types import FunctionType, FrameType, MethodType
-from typing import Any, Callable, Iterable, List, Optional, Set, TypeVar, Type, Sequence
-from threading import TIMEOUT_MAX
+from types import FunctionType, FrameType, MethodType, NoneType, UnionType
+from typing import Any, Callable, Iterable, List, Optional, Set, TypeVar, Type, Sequence, Union
 from .func_timeout import func_set_timeout, FunctionTimedOut
 
 from .color_util import COLOR, set_color
@@ -17,6 +16,9 @@ from .frame_analyzer import FrameAnalyzer
 
 
 SourceLine = TypeVar("SourceLine", str, List[str])
+# In Python 3.10, types.UnionType is the type of `str | int`
+# which is different from `typing.Union[str, int]`'s type
+UnionTypeMinor310 = type(Union[int])
 
 
 class PrintingTimedOut(FunctionTimedOut):
@@ -32,7 +34,7 @@ class _PrintConfig:
     enable: bool = True
     indent: int = 2
     depth: int = 100
-    time_limit: float = TIMEOUT_MAX
+    time_limit: float = None
     width: int = 80
     color: bool = True
     label: List[str] = []
@@ -46,10 +48,51 @@ class _PrintConfig:
     skip_recursion: bool = True
     honor_existing: bool = True
 
+    CONFIG_TYPE = {
+        "enable": bool,
+        "indent": int,
+        "depth": int,
+        "time_limit": Union[float, NoneType],
+        "width": int,
+        "color": bool,
+        "label": List[str],
+        "elements": int,
+        "attr_pattern": str,
+        "exclude": List[str],
+        "include": List[str],
+        "line_number": bool,
+        "arg_name": bool,
+        "print_methods": bool,
+        "skip_recursion": bool,
+        "honor_existing": bool
+    }
+
+    def verify_type(self, excepted_type: Any, val: Any) -> bool:
+        if hasattr(excepted_type, "_name"):
+            # A type in stdlib `types`
+            if isinstance(excepted_type, (UnionType, UnionTypeMinor310)):
+                for type_possible in excepted_type.__args__:
+                    if self.verify_type(type_possible, val):
+                        return True
+                return False
+            elif excepted_type._name in ("List", "Sequence", "Tuple"):
+                if excepted_type.__args__ == tuple():
+                    return True
+                for i in val:
+                    if not issubclass(type(i), excepted_type.__args__):
+                        return False
+                return True
+            else:
+                return issubclass(type(val), excepted_type)
+        else:
+            return issubclass(type(val), excepted_type)
+
+
     def __init__(self, **kwargs):
         for key, val in kwargs.items():
             if hasattr(self, key):
-                if isinstance(val, type(getattr(self, key))):
+                value_type = self.CONFIG_TYPE[key]
+                if self.verify_type(value_type, val):
                     setattr(self, key, val)
                 else:
                     raise TypeError(f"Wrong type for {key} - {val}")
@@ -59,7 +102,8 @@ class _PrintConfig:
     def set(self, **kwargs) -> None:
         for key, val in kwargs.items():
             if hasattr(_PrintConfig, key):
-                if isinstance(val, type(getattr(_PrintConfig, key))):
+                value_type = self.CONFIG_TYPE[key]
+                if self.verify_type(value_type, val):
                     setattr(_PrintConfig, key, val)
                 else:
                     raise TypeError(f"Wrong type for {key} - {val}")

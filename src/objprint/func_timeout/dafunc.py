@@ -182,7 +182,7 @@ def func_set_timeout(timeout: Union[float, FunctionType], allow_override=False):
         )
 
     if not is_timeout_a_function:
-        if not issubclass(timeout.__class__, (float, int)):
+        if not issubclass(timeout.__class__, (float, int)) and timeout is not None:
             try:
                 timeout = float(timeout)
             except ValueError:
