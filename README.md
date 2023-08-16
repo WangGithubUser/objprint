@@ -115,7 +115,7 @@ s = objstr(my_object)
 
 ### print more
 
-There are some optional information you can print with [config](###config).
+There are some optional information you can print with [config](#config).
 
 #### "Public" Methods
 
@@ -401,6 +401,7 @@ Please note that registering a formatter function with ```op``` will affect the 
 * ``attr_pattern(r"(!_).*")`` - the regex pattern for attribute selection
 * ``include([])`` - the list of attribute regex to do an inclusive filter
 * ``exclude([])`` - the list of attribute regex to do an exclusive filter
+* ``time_limit(threading.TIMEOUTMAX)`` - the max time for a single printing, if it exceeded the max time, `objprint` will raise a `PrintingTimedOut`
 
 You can set the configs globally using ``config`` function
 

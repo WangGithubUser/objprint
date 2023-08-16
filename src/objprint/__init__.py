@@ -4,7 +4,7 @@
 __version__ = "0.2.2"
 
 
-from .objprint import ObjPrint
+from .objprint import ObjPrint, PrintingTimedOut
 from .decorator import add_objprint
 
 _objprint = ObjPrint()

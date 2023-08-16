@@ -3,6 +3,7 @@
 
 
 import functools
+from .func_timeout import func_set_timeout
 from typing import Callable, Optional, Type, Set, Union
 
 
@@ -20,8 +21,13 @@ def add_objprint(
     else:
         def __str__(self) -> str:
             cfg = _objprint._configs.overwrite(**kwargs)
-            memo: Optional[Set] = set() if cfg.skip_recursion else None
-            return _objprint._get_custom_object_str(self, memo, indent_level=0, cfg=cfg)
+
+            @func_set_timeout(timeout=cfg.time_limit)
+            def get_result():
+                memo: Optional[Set] = set() if cfg.skip_recursion else None
+                return _objprint._get_custom_object_str(self, memo, indent_level=0, cfg=cfg)
+
+            return _objprint.run_timeout_func(get_result, (self,), time_limit=cfg.time_limit)
 
     if orig_class is None:
         def wrapper(cls: Type) -> Type:

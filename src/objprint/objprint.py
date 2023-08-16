@@ -7,8 +7,10 @@ import inspect
 import itertools
 import json
 import re
-from types import FunctionType, FrameType
-from typing import Any, Callable, Iterable, List, Optional, Set, TypeVar, Type
+from types import FunctionType, FrameType, MethodType
+from typing import Any, Callable, Iterable, List, Optional, Set, TypeVar, Type, Sequence
+from threading import TIMEOUT_MAX
+from .func_timeout import func_set_timeout, FunctionTimedOut
 
 from .color_util import COLOR, set_color
 from .frame_analyzer import FrameAnalyzer
@@ -17,10 +19,20 @@ from .frame_analyzer import FrameAnalyzer
 SourceLine = TypeVar("SourceLine", str, List[str])
 
 
+class PrintingTimedOut(FunctionTimedOut):
+    def __init__(self, objs: Sequence[Any], time_limit: float):
+        error_massage = \
+            f"Object{'' if len(objs) == 1 else 's'} {objs} can not print in " \
+            f"{time_limit} second{'' if time_limit > 1 else 's'}"
+
+        super().__init__(msg=error_massage)
+
+
 class _PrintConfig:
     enable: bool = True
     indent: int = 2
     depth: int = 100
+    time_limit: float = TIMEOUT_MAX
     width: int = 80
     color: bool = True
     label: List[str] = []
@@ -75,63 +87,82 @@ class ObjPrint:
         self.frame_analyzer = FrameAnalyzer()
         self.type_formatter = {}
 
+    @staticmethod
+    def run_timeout_func(func: MethodType, *objs, time_limit: float):
+        try:
+            return func()
+        except FunctionTimedOut:
+            raise PrintingTimedOut(objs, time_limit)
+        except Exception as error:
+            raise error
+
     def __call__(self, *objs: Any, file: Any = None, format: str = "string", **kwargs) -> Any:
         cfg = self._configs.overwrite(**kwargs)
-        if cfg.enable:
-            # if inspect.currentframe() returns None, set call_frame to None
-            # and let the callees handle it
-            call_frame = inspect.currentframe()
-            if call_frame is not None:
-                call_frame = call_frame.f_back
 
-            # Strip the kwargs that only works in op() so it won't break
-            # json.dumps()
-            kwargs.pop("arg_name", None)
+        @func_set_timeout(timeout=cfg.time_limit)
+        def wrapper():
+            if cfg.enable:
+                # if inspect.currentframe() returns None, set call_frame to None
+                # and let the callees handle it
+                call_frame = inspect.currentframe()
+                if call_frame is not None:
+                    call_frame = call_frame.f_back
 
-            if cfg.line_number:
-                self._sys_print(self._get_line_number_str(call_frame, cfg=cfg))
+                # Strip the kwargs that only works in op() so it won't break
+                # json.dumps()
+                kwargs.pop("arg_name", None)
 
-            if cfg.arg_name:
-                args = self.frame_analyzer.get_args(call_frame)
-                if args is None:
-                    args = ["Unknown Arg" for _ in range(len(objs))]
-                if cfg.color:
-                    args = [set_color(f"{arg}:", COLOR.RED) for arg in args]
-                else:
-                    args = [f"{arg}:" for arg in args]
+                if cfg.line_number:
+                    self._sys_print(self._get_line_number_str(call_frame, cfg=cfg))
 
-            if format == "json":
                 if cfg.arg_name:
-                    for arg, obj in zip(args, objs):
-                        self._sys_print(arg)
-                        self._sys_print(json.dumps(self.objjson(obj), **kwargs))
-                else:
-                    for obj in objs:
-                        self._sys_print(json.dumps(self.objjson(obj), **kwargs))
-            else:
-                # Force color with cfg as if color is not in cfg, objstr will default to False
-                kwargs["color"] = cfg.color
-                if cfg.arg_name:
-                    for arg, obj in zip(args, objs):
-                        self._sys_print(arg)
-                        self._sys_print(self.objstr(obj, **kwargs), file=file)
-                else:
-                    for obj in objs:
-                        self._sys_print(self.objstr(obj, **kwargs), file=file)
-            if self.frame_analyzer.return_object(call_frame):
-                return objs[0] if len(objs) == 1 else objs
-            else:
-                return None
+                    args = self.frame_analyzer.get_args(call_frame)
+                    if args is None:
+                        args = ["Unknown Arg" for _ in range(len(objs))]
+                    if cfg.color:
+                        args = [set_color(f"{arg}:", COLOR.RED) for arg in args]
+                    else:
+                        args = [f"{arg}:" for arg in args]
 
-        return objs[0] if len(objs) == 1 else objs
+                if format == "json":
+                    if cfg.arg_name:
+                        for arg, obj in zip(args, objs):
+                            self._sys_print(arg)
+                            self._sys_print(json.dumps(self.objjson(obj), **kwargs))
+                    else:
+                        for obj in objs:
+                            self._sys_print(json.dumps(self.objjson(obj), **kwargs))
+                else:
+                    # Force color with cfg as if color is not in cfg, objstr will default to False
+                    kwargs["color"] = cfg.color
+                    if cfg.arg_name:
+                        for arg, obj in zip(args, objs):
+                            self._sys_print(arg)
+                            self._sys_print(self.objstr(obj, **kwargs), file=file)
+                    else:
+                        for obj in objs:
+                            self._sys_print(self.objstr(obj, **kwargs), file=file)
+                if self.frame_analyzer.return_object(call_frame):
+                    return objs[0] if len(objs) == 1 else objs
+                else:
+                    return None
+
+            return objs[0] if len(objs) == 1 else objs
+
+        return self.run_timeout_func(wrapper, *objs, time_limit=cfg.time_limit)
 
     def objstr(self, obj: Any, **kwargs) -> str:
         # If no color option is specified, don't use color
         if "color" not in kwargs:
             kwargs["color"] = False
         cfg = self._configs.overwrite(**kwargs)
-        memo: Optional[Set[int]] = set() if cfg.skip_recursion else None
-        return self._objstr(obj, memo, indent_level=0, cfg=cfg)
+
+        @func_set_timeout(timeout=cfg.time_limit)
+        def wrapper():
+            memo: Optional[Set[int]] = set() if cfg.skip_recursion else None
+            return self._objstr(obj, memo, indent_level=0, cfg=cfg)
+
+        return self.run_timeout_func(wrapper, (obj,), time_limit=cfg.time_limit)
 
     def _objstr(self, obj: Any, memo: Optional[Set[int]], indent_level: int, cfg: _PrintConfig) -> str:
         # If a custom formatter is registered for the object's type, use it directly
